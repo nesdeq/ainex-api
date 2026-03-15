@@ -1,0 +1,8 @@
+# AINEX Robot udev rules
+# Install: sudo cp 99-ainex.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules
+
+# Serial port - Pi GPIO UART (STM32 controller)
+KERNEL=="ttyAMA0", ACTION=="add", MODE="0666"
+
+# USB Camera
+KERNEL=="video*", SUBSYSTEM=="video4linux", ATTRS{idVendor}=="*",  SYMLINK+="usb_cam", MODE="0666"
