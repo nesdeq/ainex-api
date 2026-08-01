@@ -230,6 +230,7 @@ ainex-api/
 ├── tools/
 │   ├── ainexCP.py       # Web control panel
 │   ├── 99-ainex.rules   # udev rules
+│   ├── HOWTO.md         # Freeing ttyAMA0 from the kernel serial console
 │   └── test_remote_vision.py
 ├── run.py               # Entry point
 └── requirements.txt

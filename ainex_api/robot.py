@@ -8,7 +8,7 @@ Main entry point combining all subsystems.
 import time
 from typing import Optional
 from .board import Board
-from .servos import ServoController
+from .servos import ServoController, SERVO_CENTER, BODY_SERVO_IDS
 from .head import HeadController
 from .motion import MotionPlayer, MOTION_STOP_TIMEOUT_S
 from .sensors import SensorReader
@@ -42,7 +42,7 @@ class Robot:
 
     def __init__(self, device: str = "/dev/ttyAMA0",
                  undistort_camera: bool = False, distortion_k1: float = -0.15,
-                 remote_vision: str = None):
+                 remote_vision: Optional[str] = None):
         """
         Initialize robot.
 
@@ -107,8 +107,8 @@ class Robot:
         return self.play('stand_low', blocking)
 
     def zero(self, duration: float = 1.0):
-        """Move all servos to center (500)"""
-        self.servos.set_body([500] * 22, duration)
+        """Move all body servos to centre"""
+        self.servos.set_body([SERVO_CENTER] * len(BODY_SERVO_IDS), duration)
         self._last_pose = 'zero'
         time.sleep(duration)
 

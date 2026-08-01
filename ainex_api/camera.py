@@ -25,7 +25,8 @@ DEFAULT_HEIGHT = 480
 CAMERA_FALLBACKS = ["/dev/video0", "/dev/video1", 0, 1]
 
 
-def open_camera(device: str = None, width: int = None, height: int = None):
+def open_camera(device: Optional[str] = None, width: Optional[int] = None,
+                height: Optional[int] = None):
     """
     Open camera with fallback support.
 
@@ -83,7 +84,8 @@ class Camera:
         - Typical values for USB webcams: -0.1 to -0.25
     """
 
-    def __init__(self, device: str = None, width: int = None, height: int = None,
+    def __init__(self, device: Optional[str] = None, width: Optional[int] = None,
+                 height: Optional[int] = None,
                  undistort: bool = False, distortion_k1: float = -0.15):
         """
         Initialize camera.
@@ -144,7 +146,7 @@ class Camera:
             0.0                   # k3: tertiary radial
         ], dtype=np.float32)
 
-        # Compute optimal new camera matrix (alpha=1 keeps all pixels)
+        # alpha=0.5 balances cropping against keeping edge pixels
         new_camera_matrix, _ = cv2.getOptimalNewCameraMatrix(
             camera_matrix, dist_coeffs, (w, h), alpha=0.5
         )

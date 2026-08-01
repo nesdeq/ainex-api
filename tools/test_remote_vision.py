@@ -11,11 +11,11 @@ import sys
 import os
 import time
 import socket
-import struct
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ainex_api.remote_vision import MAGIC_FRAME, MAGIC_RESULT, RESULT_STRUCT, ID_TO_GESTURE
+from ainex_api.remote_vision import (MAGIC_FRAME, MAGIC_RESULT, RESULT_STRUCT,
+                                     FRAME_HEADER, ID_TO_GESTURE)
 
 RESULT_SIZE = RESULT_STRUCT.size
 
@@ -28,13 +28,13 @@ def test_connection(host: str, port: int) -> bool:
         s.settimeout(5)
         s.connect((host, port))
         s.close()
-        print(f"    OK")
+        print("    OK")
         return True
     except socket.timeout:
-        print(f"    FAIL - Timeout")
+        print("    FAIL - Timeout")
         return False
     except ConnectionRefusedError:
-        print(f"    FAIL - Connection refused (server not running?)")
+        print("    FAIL - Connection refused (server not running?)")
         return False
     except OSError as e:
         print(f"    FAIL - {e}")
@@ -43,13 +43,13 @@ def test_connection(host: str, port: int) -> bool:
 
 def test_camera() -> tuple:
     """Test camera, return (success, capture, frame)."""
-    print(f"[2] Testing camera...")
+    print("[2] Testing camera...")
     try:
         from ainex_api.camera import open_camera
         cap, w, h = open_camera()
 
         if cap is None:
-            print(f"    FAIL - No camera")
+            print("    FAIL - No camera")
             return False, None, None
 
         ret, frame = cap.read()
@@ -57,21 +57,21 @@ def test_camera() -> tuple:
             print(f"    OK - {w}x{h}")
             return True, cap, frame
         else:
-            print(f"    FAIL - No frame")
+            print("    FAIL - No frame")
             cap.release()
             return False, None, None
 
     except ImportError:
-        print(f"    FAIL - OpenCV not installed")
+        print("    FAIL - OpenCV not installed")
         return False, None, None
     except Exception as e:
         print(f"    FAIL - {e}")
         return False, None, None
 
 
-def test_roundtrip(host: str, port: int, cap, frame) -> bool:
+def test_roundtrip(host: str, port: int, frame) -> bool:
     """Test sending frame and receiving result."""
-    print(f"[3] Testing round-trip...")
+    print("[3] Testing round-trip...")
     try:
         import cv2
 
@@ -84,7 +84,7 @@ def test_roundtrip(host: str, port: int, cap, frame) -> bool:
         jpeg_bytes = jpeg.tobytes()
         h, w = frame.shape[:2]
 
-        header = struct.pack('<2sIHHI', MAGIC_FRAME, 1, w, h, len(jpeg_bytes))
+        header = FRAME_HEADER.pack(MAGIC_FRAME, 1, w, h, len(jpeg_bytes))
 
         start = time.monotonic()
         s.sendall(header + jpeg_bytes)
@@ -102,14 +102,14 @@ def test_roundtrip(host: str, port: int, cap, frame) -> bool:
             RESULT_STRUCT.unpack(data)
 
         if magic != MAGIC_RESULT:
-            print(f"    FAIL - Bad response")
+            print("    FAIL - Bad response")
             return False
 
         print(f"    OK - {elapsed:.1f}ms")
         if face_w > 0:
             print(f"    Face: ({face_x},{face_y}) {face_w}x{face_h}")
         else:
-            print(f"    Face: none")
+            print("    Face: none")
         print(f"    Gesture: {ID_TO_GESTURE.get(gesture_id, '?')}")
 
         s.close()
@@ -141,7 +141,7 @@ def test_latency(host: str, port: int, cap, count: int = 20) -> bool:
             jpeg_bytes = jpeg.tobytes()
             h, w = frame.shape[:2]
 
-            header = struct.pack('<2sIHHI', MAGIC_FRAME, i, w, h, len(jpeg_bytes))
+            header = FRAME_HEADER.pack(MAGIC_FRAME, i, w, h, len(jpeg_bytes))
 
             start = time.monotonic()
             s.sendall(header + jpeg_bytes)
@@ -163,7 +163,7 @@ def test_latency(host: str, port: int, cap, count: int = 20) -> bool:
             print(f"    OK - Avg: {avg:.1f}ms, Min: {min(latencies):.1f}ms, Max: {max(latencies):.1f}ms")
             return True
         else:
-            print(f"    FAIL - No successful frames")
+            print("    FAIL - No successful frames")
             return False
 
     except Exception as e:
@@ -186,7 +186,7 @@ def main():
 
     print()
     print("=" * 40)
-    print(f"Remote Vision Test")
+    print("Remote Vision Test")
     print(f"Server: {host}:{port}")
     print("=" * 40)
     print()
@@ -201,7 +201,7 @@ def main():
         return 1
 
     # Test 3: Round-trip
-    if not test_roundtrip(host, port, cap, frame):
+    if not test_roundtrip(host, port, frame):
         cap.release()
         return 1
 

@@ -131,9 +131,10 @@ class ServoController:
             positions: List of 22 positions for servos 1-22
             duration: Movement time in seconds
         """
-        if len(positions) != 22:
-            raise ValueError(f"Expected 22 positions, got {len(positions)}")
-        pos_list = [[i + 1, check_position(i + 1, positions[i])] for i in range(22)]
+        if len(positions) != len(BODY_SERVO_IDS):
+            raise ValueError(f"Expected {len(BODY_SERVO_IDS)} positions, got {len(positions)}")
+        pos_list = [[sid, check_position(sid, pos)]
+                    for sid, pos in zip(BODY_SERVO_IDS, positions)]
         self.board.bus_servo_set_position(duration, pos_list)
 
     def get_position(self, servo_id: int, use_cache: bool = False) -> Optional[int]:

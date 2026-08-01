@@ -101,7 +101,7 @@ class BehaviorController:
 
         # Actions that need cooldown
         if gesture_type == 'waving' and cooldown_ok:
-            print(f"[ACTION] waving -> greet")
+            print("[ACTION] waving -> greet")
             self._last_action_time = now
             self._current_pose = 'none'
             self.robot.greet(blocking=False)
@@ -115,25 +115,25 @@ class BehaviorController:
         # Mirrored, not copied: the user's left hand raises the robot's right arm,
         # so the raised arm appears on the same side as the user's.
         if gesture_type == 'left_hand_raised':
-            print(f"[MIRROR] -> left_hand_raised")
+            print("[MIRROR] -> left_hand_raised")
             self._current_pose = gesture_type
             self.robot.raise_right_arm(duration=0.8)
             self.stats['gestures_mirrored'] += 1
 
         elif gesture_type == 'right_hand_raised':
-            print(f"[MIRROR] -> right_hand_raised")
+            print("[MIRROR] -> right_hand_raised")
             self._current_pose = gesture_type
             self.robot.raise_left_arm(duration=0.8)
             self.stats['gestures_mirrored'] += 1
 
         elif gesture_type == 'both_hands_raised':
-            print(f"[MIRROR] -> both_hands_raised")
+            print("[MIRROR] -> both_hands_raised")
             self._current_pose = gesture_type
             self.robot.raise_both_arms(duration=0.8)
             self.stats['gestures_mirrored'] += 1
 
         elif gesture_type == 'none' and self._current_pose != 'none':
-            print(f"[MIRROR] -> none (lower arms)")
+            print("[MIRROR] -> none (lower arms)")
             self._current_pose = 'none'
             self.robot.lower_arms(duration=0.8)
 

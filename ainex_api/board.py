@@ -71,6 +71,10 @@ BROADCAST_SERVO_ID = 254
 BUS_SERVO_POSITION_MIN = 0
 BUS_SERVO_POSITION_MAX = 1000
 
+# PWM servos take a pulse width in microseconds, not the bus servo scale.
+PWM_SERVO_POSITION_MIN = 500
+PWM_SERVO_POSITION_MAX = 2500
+
 _GAMEPAD_STRUCT = struct.Struct("<HB4b")
 _IMU_9AXIS = struct.Struct("<9f")
 _IMU_6AXIS = struct.Struct("<6f")
@@ -345,7 +349,10 @@ class Board:
         data = bytes([0x01, duration_ms & 0xFF, (duration_ms >> 8) & 0xFF, len(positions)])
         for servo_id, pos in positions:
             _u8("servo_id", servo_id)
-            _u16("position", pos)
+            if not PWM_SERVO_POSITION_MIN <= pos <= PWM_SERVO_POSITION_MAX:
+                raise ValueError(f"Position {pos} outside "
+                                 f"{PWM_SERVO_POSITION_MIN}-{PWM_SERVO_POSITION_MAX} "
+                                 f"for PWM servo {servo_id}")
             data += struct.pack("<BH", servo_id, pos)
         self._write(PacketFunction.PWM_SERVO, data)
 

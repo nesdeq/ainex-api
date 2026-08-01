@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nicegui import ui, app, run
 from ainex_api import Robot
 from ainex_api.motion import MOTION_STOP_TIMEOUT_S
+from ainex_api.head import PAN_MIN, PAN_MAX, TILT_MIN, TILT_MAX
 
 # Global state
 robot: Robot = None
@@ -49,7 +50,7 @@ def get_robot() -> Robot:
 
 def graceful_shutdown():
     """Shutdown robot gracefully."""
-    global robot, shutdown_done
+    global shutdown_done
     if robot is None or shutdown_done:
         return
     shutdown_done = True
@@ -163,15 +164,15 @@ async def main_page():
                 with ui.column().classes('items-center'):
                     with ui.row():
                         ui.label().classes('w-12')
-                        ui.button('⬆️', on_click=lambda: r.head.move(tilt=min(625, r.head.tilt + 50))).classes('w-12 h-12')
+                        ui.button('⬆️', on_click=lambda: r.head.move(tilt=min(TILT_MAX, r.head.tilt + 50))).classes('w-12 h-12')
                         ui.label().classes('w-12')
                     with ui.row():
-                        ui.button('👈', on_click=lambda: r.head.move(pan=min(875, r.head.pan + 75))).classes('w-12 h-12')
+                        ui.button('👈', on_click=lambda: r.head.move(pan=min(PAN_MAX, r.head.pan + 75))).classes('w-12 h-12')
                         ui.button('⏺️', on_click=lambda: r.head.center(duration=0.5)).classes('w-12 h-12')
-                        ui.button('👉', on_click=lambda: r.head.move(pan=max(125, r.head.pan - 75))).classes('w-12 h-12')
+                        ui.button('👉', on_click=lambda: r.head.move(pan=max(PAN_MIN, r.head.pan - 75))).classes('w-12 h-12')
                     with ui.row():
                         ui.label().classes('w-12')
-                        ui.button('⬇️', on_click=lambda: r.head.move(tilt=max(315, r.head.tilt - 50))).classes('w-12 h-12')
+                        ui.button('⬇️', on_click=lambda: r.head.move(tilt=max(TILT_MIN, r.head.tilt - 50))).classes('w-12 h-12')
                         ui.label().classes('w-12')
 
         # Actions

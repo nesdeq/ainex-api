@@ -13,6 +13,7 @@ import threading
 from typing import Optional, List, Dict, Callable
 from dataclasses import dataclass
 from .board import Board
+from .servos import check_position
 
 
 # Bounds the wait in Robot.close(); the player only checks its stop flag between
@@ -233,4 +234,6 @@ class MotionPlayer:
             duration_ms: Movement duration in milliseconds
             positions: List of [servo_id, position] pairs
         """
+        for servo_id, pos in positions:
+            check_position(servo_id, pos)
         self.board.bus_servo_set_position(duration_ms / 1000.0, positions)

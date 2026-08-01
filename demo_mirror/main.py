@@ -10,6 +10,7 @@ import sys
 import time
 import signal
 import argparse
+from typing import Optional
 
 from ainex_api import Robot
 from ainex_api.motion import MOTION_STOP_TIMEOUT_S
@@ -30,7 +31,7 @@ class DemoMirror:
 
     def __init__(self, loop_rate: int = 10, action_cooldown: float = 4.0,
                  undistort: bool = False, distortion_k1: float = -0.15,
-                 remote_vision: str = None):
+                 remote_vision: Optional[str] = None):
         print("=" * 60)
         print("Demo Mirror - Face Tracking + Gesture Mirroring")
         print("=" * 60)
@@ -61,7 +62,7 @@ class DemoMirror:
 
         # Print status
         print("=" * 60)
-        print(f"  Camera:     640x480 @ /dev/usb_cam")
+        print("  Camera:     640x480 @ /dev/usb_cam")
         print(f"  MediaPipe:  {'AVAILABLE' if self.robot.vision.has_mediapipe else 'NOT INSTALLED'}")
         print(f"  Loop Rate:  {loop_rate} Hz")
         print("=" * 60)

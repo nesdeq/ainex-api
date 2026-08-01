@@ -203,10 +203,7 @@ class GestureAnalyzer:
             GestureData (always returns, 'none' if no gesture)
         """
         if landmarks is None:
-            self._elbow_angle_history['left'].clear()
-            self._elbow_angle_history['right'].clear()
-            self._wrist_x_history['left'].clear()
-            self._wrist_x_history['right'].clear()
+            self._clear_wave_history()
             return self._confirm('none')
 
         lm = landmarks.landmark
@@ -334,12 +331,15 @@ class GestureAnalyzer:
             timestamp=time.time()
         )
 
+    def _clear_wave_history(self):
+        """Drop the oscillation history for both arms."""
+        for hand in ('left', 'right'):
+            self._elbow_angle_history[hand].clear()
+            self._wrist_x_history[hand].clear()
+
     def reset(self):
         """Reset analyzer state."""
-        self._elbow_angle_history['left'].clear()
-        self._elbow_angle_history['right'].clear()
-        self._wrist_x_history['left'].clear()
-        self._wrist_x_history['right'].clear()
+        self._clear_wave_history()
         self._gesture_history.clear()
         self._confirmed_gesture = 'none'
 

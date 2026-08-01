@@ -59,7 +59,10 @@ RESULT_STRUCT = struct.Struct('<2sIhhHHBB')
 class RemoteVisionClient:
     """
     Runs on robot. Captures frames, sends to server, receives results.
-    Same interface as VisionSystem - drop-in replacement.
+
+    Implements the VisionSystem subset the control loop needs: start, stop,
+    update, get_face, get_gesture, get_frame, has_mediapipe. Landmarks and
+    draw_debug stay on the server and are not available here.
     """
 
     def __init__(self, host: str, port: int, camera: Camera,
@@ -71,11 +74,9 @@ class RemoteVisionClient:
 
         self._socket: Optional[socket.socket] = None
         self._connected = False
-        self._running = False
 
         # Cached results (same interface as VisionSystem)
         self._last_frame: Optional[np.ndarray] = None
-        self._last_frame_hw = (480, 640)
         self._cached_face: Optional[FaceData] = None
         self._cached_gesture: Optional[GestureData] = None
 
@@ -86,23 +87,19 @@ class RemoteVisionClient:
     def start(self) -> bool:
         """Start camera and connect to server."""
         if not self.camera.start():
-            print(f"[RemoteVision] ERROR: Camera failed to start")
+            print("[RemoteVision] ERROR: Camera failed to start")
             return False
-
-        self._running = True
 
         if not self._connect():
             print(f"[RemoteVision] ERROR: Could not connect to {self._host}:{self._port}")
             print(f"[RemoteVision] Make sure server is running: python -m ainex_api.remote_vision --port {self._port}")
             self.camera.stop()
-            self._running = False
             return False
 
         return True
 
     def stop(self):
         """Stop camera and disconnect."""
-        self._running = False
         self._disconnect()
         self.camera.stop()
 
@@ -126,15 +123,15 @@ class RemoteVisionClient:
             self._socket.connect((self._host, self._port))
             self._socket.settimeout(10.0)  # Longer timeout for recv after connected
             self._connected = True
-            print(f"[RemoteVision] Connected!")
+            print("[RemoteVision] Connected!")
             return True
         except socket.timeout:
-            print(f"[RemoteVision] Connection timed out")
+            print("[RemoteVision] Connection timed out")
             self._socket = None
             self._connected = False
             return False
         except ConnectionRefusedError:
-            print(f"[RemoteVision] Connection refused - is server running?")
+            print("[RemoteVision] Connection refused - is server running?")
             self._socket = None
             self._connected = False
             return False
@@ -239,7 +236,6 @@ class RemoteVisionClient:
         if self._last_frame is None:
             return False
 
-        self._last_frame_hw = self._last_frame.shape[:2]
         self._frame_id = (self._frame_id + 1) & 0xFFFFFFFF
 
         # If not connected, clear results and return
@@ -424,7 +420,6 @@ class RemoteVisionServer:
         """Run detection on frame."""
         # Feed frame to dummy camera
         self._vision.camera._frame = frame
-        self._vision.camera._frame_count += 1
 
         # Run detection
         self._vision.update()
@@ -470,7 +465,6 @@ class _DummyCamera:
         self.width = width
         self.height = height
         self._frame = None
-        self._frame_count = 0
         self._running = True
 
     def start(self) -> bool:
