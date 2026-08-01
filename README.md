@@ -40,7 +40,7 @@ robot = Robot()
 # Poses
 robot.stand()           # Standing pose
 robot.stand_low()       # Crouched
-robot.zero()            # All servos center
+robot.zero()            # Body servos 1-22 center; leaves the head where it is
 robot.relax()           # Disable torque
 robot.enable()          # Enable torque
 
@@ -79,14 +79,16 @@ robot.head.tilt                     # Current tilt position
 
 # Vision
 robot.vision.start()
-robot.vision.update()               # Capture + detect
+robot.vision.update()               # Capture + detect; False if no fresh result
 face = robot.vision.get_face()      # FaceData or None
 gesture = robot.vision.get_gesture() # GestureData
 frame = robot.vision.get_frame()    # BGR numpy array
-debug = robot.vision.draw_debug(face=True, gesture=True, pose=True)
-robot.vision.landmarks              # Raw pose landmarks
 robot.vision.has_mediapipe          # MediaPipe available?
 robot.vision.stop()
+
+# Local vision only; absent on the remote client, which leaves both on the server
+debug = robot.vision.draw_debug(face=True, gesture=True, pose=True)
+robot.vision.landmarks              # Raw pose landmarks
 
 # Servos (direct control)
 robot.servos.set_position(13, 500, duration=0.5)
@@ -165,7 +167,7 @@ from ainex_api import Camera, open_camera
 camera = Camera(undistort=True, distortion_k1=-0.15)
 camera.start()
 frame = camera.read()       # BGR numpy array or None
-camera.fps                  # Current FPS
+camera.fps                  # Mean FPS since start()
 camera.is_open              # Running?
 camera.stop()
 
@@ -177,6 +179,22 @@ cap, width, height = open_camera()
 
 `demo_mirror/` is a standalone demo that tracks faces with the head and mirrors arm gestures. Wave at the robot and it greets back. Run it with `python run.py` (see Quick Start).
 
+## Tests
+
+```bash
+pip install pytest
+pytest                      # everything the current machine can run
+pytest -m "not hardware"    # logic only, no robot needed
+pytest -m hardware          # only the tests that talk to the robot
+```
+
+Most tests drive the real `Board` through a fake serial port, so the framing, checksum and
+reply-correlation code under test is the code that ships.
+
+Tests marked `hardware` open `/dev/ttyAMA0` and issue bus servo **read** commands; those marked
+`camera` open `/dev/usb_cam`. Both skip themselves when the device is absent. Nothing in the suite
+commands a servo position, enables torque or plays a motion, so running it cannot move the robot.
+
 ## Hardware
 
 | Resource | Path | Details |
@@ -184,12 +202,20 @@ cap, width, height = open_camera()
 | Serial | `/dev/ttyAMA0` | 1M baud, Pi GPIO UART to STM32 |
 | Camera | `/dev/usb_cam` | 640x480 (symlink from udev) |
 | Servos | Bus servos | Position 0-1000, center=500 |
-| Head | Servos 23/24 | Pan 125-875, tilt 315-625; enforced on every write path |
+| Head | Servos 23/24 | Pan 125-875, tilt 315-625 |
 | Battery | 3S LiPo | 11.1V 3500mAh, 12.6V full, recharge at 10.5V, stop at 9.9V |
 
-Sensor reads older than 15 s report `None` rather than a stale value. Servo writes outside a
-servo's travel raise `ValueError`; percentage is an estimate from a resting discharge curve and
-reads low under load.
+IMU and battery reads older than 15 s report `None` rather than a stale value; button and
+gamepad reads are passthroughs with no staleness of their own. Battery percentage is an
+estimate from a resting discharge curve and reads low under load.
+
+Out-of-range servo positions are handled differently per entry point, by design:
+
+| Path | Behaviour |
+|------|-----------|
+| `robot.servos.*`, `robot.motion.set_servos_direct` | Raise `ValueError` outside the servo's travel |
+| `robot.head.*` | Clamp silently to the head limits, so a tracking loop cannot crash |
+| `robot.board.*` | Raise `ValueError` outside the 0-1000 command range only, with no per-servo travel check |
 
 ## Servo Map
 
@@ -227,11 +253,13 @@ ainex-api/
 │   ├── camera.py        # USB camera
 │   └── motions/         # 48 .d6a files
 ├── demo_mirror/         # Demo: face tracking + gesture mirroring
+├── tests/               # pytest suite; hardware tests skip without a robot
 ├── tools/
 │   ├── ainexCP.py       # Web control panel
 │   ├── 99-ainex.rules   # udev rules
 │   ├── HOWTO.md         # Freeing ttyAMA0 from the kernel serial console
 │   └── test_remote_vision.py
+├── pytest.ini
 ├── run.py               # Entry point
 └── requirements.txt
 ```

@@ -229,7 +229,7 @@ class Camera:
 
     @property
     def fps(self) -> float:
-        """Get current capture FPS"""
+        """Mean capture rate since start(), not an instantaneous reading"""
         if self._start_time and self._frame_count > 0:
             elapsed = time.monotonic() - self._start_time
             return self._frame_count / elapsed if elapsed > 0 else 0

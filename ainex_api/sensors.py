@@ -115,9 +115,12 @@ class SensorReader:
         # Button callback
         self._button_callback: Optional[Callable[[ButtonEvent], None]] = None
         self._button_thread: Optional[threading.Thread] = None
+        self._thread_lock = threading.Lock()
         self._running = False
 
-        # Last values, with the monotonic time they arrived
+        # Last values, with the monotonic time they arrived. Reentrant because
+        # the smoothed getter reads the window through the plain one.
+        self._state_lock = threading.RLock()
         self._last_imu: Optional[IMUData] = None
         self._last_imu_time: Optional[float] = None
         self._last_battery: Optional[int] = None
@@ -125,16 +128,27 @@ class SensorReader:
         self._battery_window = deque(maxlen=SMOOTHING_SAMPLES)
 
     def start(self):
-        """Start button polling"""
-        self._running = True
+        """
+        Start button polling.
 
+        Polling only runs once a callback exists, so calling this before
+        on_button() is fine: registering the callback starts the thread.
+        """
+        self._running = True
         if self._button_callback:
-            self._button_thread = threading.Thread(target=self._poll_buttons, daemon=True)
-            self._button_thread.start()
+            self._ensure_button_thread()
 
     def stop(self):
         """Stop button polling"""
         self._running = False
+
+    def _ensure_button_thread(self):
+        """Start the poll thread unless one is already running"""
+        with self._thread_lock:
+            if self._button_thread is not None and self._button_thread.is_alive():
+                return
+            self._button_thread = threading.Thread(target=self._poll_buttons, daemon=True)
+            self._button_thread.start()
 
     def get_imu(self) -> Optional[IMUData]:
         """
@@ -145,13 +159,14 @@ class SensorReader:
         """
         data = self.board.get_imu()
         now = time.monotonic()
-        if data:
-            self._last_imu = IMUData.from_tuple(data)
-            self._last_imu_time = now
-        elif self._last_imu_time is not None and now - self._last_imu_time > SENSOR_TTL_S:
-            self._last_imu = None
-            self._last_imu_time = None
-        return self._last_imu
+        with self._state_lock:
+            if data:
+                self._last_imu = IMUData.from_tuple(data)
+                self._last_imu_time = now
+            elif self._last_imu_time is not None and now - self._last_imu_time > SENSOR_TTL_S:
+                self._last_imu = None
+                self._last_imu_time = None
+            return self._last_imu
 
     def get_battery_voltage(self) -> Optional[int]:
         """
@@ -162,15 +177,16 @@ class SensorReader:
         """
         voltage = self.board.get_battery()
         now = time.monotonic()
-        if voltage is not None:
-            self._last_battery = voltage
-            self._last_battery_time = now
-            self._battery_window.append(voltage)
-        elif self._last_battery_time is not None and now - self._last_battery_time > SENSOR_TTL_S:
-            self._last_battery = None
-            self._last_battery_time = None
-            self._battery_window.clear()
-        return self._last_battery
+        with self._state_lock:
+            if voltage is not None:
+                self._last_battery = voltage
+                self._last_battery_time = now
+                self._battery_window.append(voltage)
+            elif self._last_battery_time is not None and now - self._last_battery_time > SENSOR_TTL_S:
+                self._last_battery = None
+                self._last_battery_time = None
+                self._battery_window.clear()
+            return self._last_battery
 
     def get_battery_voltage_smoothed(self) -> Optional[float]:
         """
@@ -181,9 +197,10 @@ class SensorReader:
         until SMOOTHING_SAMPLES readings have arrived.
         """
         self.get_battery_voltage()
-        if len(self._battery_window) < SMOOTHING_SAMPLES:
-            return None
-        return statistics.median(self._battery_window)
+        with self._state_lock:
+            if len(self._battery_window) < SMOOTHING_SAMPLES:
+                return None
+            return statistics.median(self._battery_window)
 
     def get_battery_state(self) -> Optional[BatteryState]:
         """
@@ -246,6 +263,8 @@ class SensorReader:
             callback: Function called with ButtonEvent
         """
         self._button_callback = callback
+        if self._running:
+            self._ensure_button_thread()
 
     def _poll_buttons(self):
         """Background thread for button polling; no fault may kill it"""

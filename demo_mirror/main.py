@@ -36,6 +36,11 @@ class DemoMirror:
         print("Demo Mirror - Face Tracking + Gesture Mirroring")
         print("=" * 60)
 
+        # Checked before the robot exists, so a bad rate cannot strand an open
+        # serial port on the way to a ZeroDivisionError.
+        if loop_rate <= 0:
+            raise ValueError(f"loop_rate={loop_rate} must be positive")
+
         # Initialize robot with vision enabled
         self.robot = Robot(
             undistort_camera=undistort,
@@ -45,27 +50,29 @@ class DemoMirror:
         vision_mode = "REMOTE → " + remote_vision if remote_vision else "LOCAL"
         print(f"[OK] Robot initialized (vision: {vision_mode})")
 
-        # Initialize behavior controller
-        self.behavior = BehaviorController(self.robot, action_cooldown)
-        print("[OK] Behavior controller initialized")
+        # The robot owns the serial port from here, so nothing below may fail
+        # without handing it back.
+        try:
+            self.behavior = BehaviorController(self.robot, action_cooldown)
+            print("[OK] Behavior controller initialized")
 
-        # Loop rate
-        self.loop_rate = loop_rate
-        self._loop_period = 1.0 / loop_rate
+            self.loop_rate = loop_rate
+            self._loop_period = 1.0 / loop_rate
 
-        # Running state
-        self.running = True
-        self._shutdown_requested = False
+            self.running = True
+            self._shutdown_requested = False
 
-        # Setup signal handler
-        signal.signal(signal.SIGINT, self._signal_handler)
+            signal.signal(signal.SIGINT, self._signal_handler)
 
-        # Print status
-        print("=" * 60)
-        print("  Camera:     640x480 @ /dev/usb_cam")
-        print(f"  MediaPipe:  {'AVAILABLE' if self.robot.vision.has_mediapipe else 'NOT INSTALLED'}")
-        print(f"  Loop Rate:  {loop_rate} Hz")
-        print("=" * 60)
+            print("=" * 60)
+            print(f"  Camera:     {self.robot._camera.width}x{self.robot._camera.height} "
+                  f"@ {self.robot._camera.device}")
+            print(f"  MediaPipe:  {'AVAILABLE' if self.robot.vision.has_mediapipe else 'NOT INSTALLED'}")
+            print(f"  Loop Rate:  {loop_rate} Hz")
+            print("=" * 60)
+        except Exception:
+            self.robot.close()
+            raise
 
     def _signal_handler(self, signum, frame):
         """Handle Ctrl+C"""
@@ -89,6 +96,13 @@ class DemoMirror:
 
     def run(self):
         """Run main control loop"""
+        try:
+            self._run()
+        finally:
+            self._cleanup()
+
+    def _run(self):
+        """Main control loop; run() guarantees cleanup around this."""
         self._init_hardware()
 
         # Start vision
@@ -112,42 +126,38 @@ class DemoMirror:
         frame_count = 0
         start_time = time.monotonic()
 
-        try:
-            while self.running:
-                loop_start = time.monotonic()
-                frame_count += 1
+        while self.running:
+            loop_start = time.monotonic()
+            frame_count += 1
 
-                # Update vision (captures frame, runs detection)
-                self.robot.vision.update()
+            # Update vision (captures frame, runs detection)
+            self.robot.vision.update()
 
-                # Debug first 5 frames
-                if frame_count <= 5:
-                    face = self.robot.vision.get_face()
-                    if face:
-                        print(f"[F{frame_count}] FACE at ({face.x}, {face.y})")
-                    else:
-                        print(f"[F{frame_count}] no face")
+            # Debug first 5 frames
+            if frame_count <= 5:
+                face = self.robot.vision.get_face()
+                if face:
+                    print(f"[F{frame_count}] FACE at ({face.x}, {face.y})")
+                else:
+                    print(f"[F{frame_count}] no face")
 
-                # Run behavior (reads from vision, controls robot)
-                self.behavior.update()
+            # Run behavior (reads from vision, controls robot)
+            self.behavior.update()
 
-                # Status output every 3 seconds
-                if frame_count % (self.loop_rate * 3) == 0:
-                    elapsed = time.monotonic() - start_time
-                    fps = frame_count / elapsed
-                    state = self.behavior.current_state.name
-                    gesture = self.robot.vision.get_gesture()
-                    g = gesture.gesture if gesture else 'none'
-                    face = self.robot.vision.get_face()
-                    print(f"[{elapsed:.0f}s] FPS:{fps:.1f} State:{state} Face:{face is not None} Gesture:{g}")
+            # Status output every 3 seconds
+            if frame_count % (self.loop_rate * 3) == 0:
+                elapsed = time.monotonic() - start_time
+                fps = frame_count / elapsed
+                state = self.behavior.current_state.name
+                gesture = self.robot.vision.get_gesture()
+                g = gesture.gesture if gesture else 'none'
+                face = self.robot.vision.get_face()
+                print(f"[{elapsed:.0f}s] FPS:{fps:.1f} State:{state} Face:{face is not None} Gesture:{g}")
 
-                # Rate limiting
-                elapsed = time.monotonic() - loop_start
-                if elapsed < self._loop_period:
-                    time.sleep(self._loop_period - elapsed)
-
-        finally:
-            self._cleanup()
+            # Rate limiting
+            elapsed = time.monotonic() - loop_start
+            if elapsed < self._loop_period:
+                time.sleep(self._loop_period - elapsed)
 
     def _cleanup(self):
         """Cleanup on shutdown"""

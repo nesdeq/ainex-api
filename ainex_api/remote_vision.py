@@ -38,6 +38,17 @@ MAX_JPEG_BYTES = 4 * 1024 * 1024
 _I16_MIN, _I16_MAX = -32768, 32767
 _U16_MAX = 65535
 
+# Confidence travels as a percentage.
+_CONFIDENCE_SCALE = 100
+
+# Either end drops a peer that goes quiet mid-message for this long. Applied on
+# both sides, so a stalled client cannot pin the single-client server forever.
+SOCKET_TIMEOUT_S = 10.0
+CONNECT_TIMEOUT_S = 5.0
+
+# How often the accept loop wakes to check whether the server is shutting down.
+ACCEPT_POLL_S = 1.0
+
 # Gesture ID mapping
 GESTURE_IDS = {
     'none': 0,
@@ -119,9 +130,9 @@ class RemoteVisionClient:
         try:
             self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            self._socket.settimeout(5.0)
+            self._socket.settimeout(CONNECT_TIMEOUT_S)
             self._socket.connect((self._host, self._port))
-            self._socket.settimeout(10.0)  # Longer timeout for recv after connected
+            self._socket.settimeout(SOCKET_TIMEOUT_S)
             self._connected = True
             print("[RemoteVision] Connected!")
             return True
@@ -192,7 +203,10 @@ class RemoteVisionClient:
                 RESULT_STRUCT.unpack(data)
 
             if magic != MAGIC_RESULT:
-                print(f"[RemoteVision] Bad magic: {magic}")
+                # The stream has no resync marker, so a misaligned read stays
+                # misaligned. Drop the connection and let update() reconnect.
+                print(f"[RemoteVision] Bad magic {magic}, dropping desynced connection")
+                self._disconnect()
                 return False
 
             now = time.time()
@@ -211,7 +225,7 @@ class RemoteVisionClient:
             gesture_name = ID_TO_GESTURE.get(gesture_id, 'none')
             self._cached_gesture = GestureData(
                 gesture=gesture_name,
-                confidence=confidence / 100.0,
+                confidence=confidence / _CONFIDENCE_SCALE,
                 timestamp=now
             )
 
@@ -225,30 +239,41 @@ class RemoteVisionClient:
     def update(self) -> bool:
         """
         Capture frame, send to server, receive results.
-        Same interface as VisionSystem.update().
+
+        Returns:
+            True only when a fresh detection came back. A captured frame whose
+            round trip failed returns False and clears the cached detection, so
+            a control loop can never mistake a dead link for a held face.
         """
-        # Try reconnect if disconnected
         if not self._connected:
             self._connect()
 
-        # Capture frame
         self._last_frame = self.camera.read()
         if self._last_frame is None:
+            self._clear_detection()
             return False
 
         self._frame_id = (self._frame_id + 1) & 0xFFFFFFFF
 
-        # If not connected, clear results and return
         if not self._connected:
-            self._cached_face = None
-            self._cached_gesture = GestureData(gesture='none', confidence=0, timestamp=time.time())
-            return True  # Frame captured, just no detection
+            self._clear_detection()
+            return False
 
-        # Send frame and receive result
-        if self._send_frame(self._last_frame):
-            self._recv_result()
+        if not self._send_frame(self._last_frame):
+            self._clear_detection()
+            return False
+
+        if not self._recv_result():
+            self._clear_detection()
+            return False
 
         return True
+
+    def _clear_detection(self):
+        """Forget the last result so nothing downstream serves it as current."""
+        self._cached_face = None
+        self._cached_gesture = GestureData(gesture='none', confidence=0.0,
+                                           timestamp=time.time())
 
     def get_face(self) -> Optional[FaceData]:
         """Get cached face detection result."""
@@ -321,12 +346,16 @@ class RemoteVisionServer:
         try:
             while self._running:
                 # Accept connection
-                self._socket.settimeout(1.0)
+                self._socket.settimeout(ACCEPT_POLL_S)
                 try:
                     if self._client:
                         self._client.close()
                     self._client, addr = self._socket.accept()
                     self._client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    # Accepted sockets do not inherit the listener's timeout, and
+                    # this server serves one client at a time: without this a peer
+                    # that stalls mid-message blocks every later client forever.
+                    self._client.settimeout(SOCKET_TIMEOUT_S)
                     print(f"[RemoteVisionServer] Client connected: {addr}")
                 except socket.timeout:
                     continue
@@ -336,6 +365,14 @@ class RemoteVisionServer:
 
                 # Process frames from this client
                 self._process_client()
+
+                # Closed here rather than at the next accept, so a peer that
+                # broke the protocol learns immediately instead of timing out.
+                try:
+                    self._client.close()
+                except OSError:
+                    pass
+                self._client = None
 
                 print(f"[RemoteVisionServer] Client disconnected. Processed {self._frames_processed} frames")
 
@@ -376,12 +413,16 @@ class RemoteVisionServer:
                 # Decode frame
                 frame = cv2.imdecode(np.frombuffer(jpeg_data, np.uint8), cv2.IMREAD_COLOR)
                 if frame is None:
+                    # The client blocks on a reply per frame, so answer with an
+                    # empty result rather than leaving it to time out.
                     print("[RemoteVisionServer] Failed to decode frame")
+                    self._send_result(frame_id, None, None)
                     continue
 
-                # Initialize vision system on first frame
+                # Sized from the decoded image, not the client's header claim
                 if self._vision is None:
-                    self._init_vision(width, height)
+                    frame_h, frame_w = frame.shape[:2]
+                    self._init_vision(frame_w, frame_h)
 
                 # Run detection
                 face, gesture = self._detect(frame)
@@ -402,7 +443,12 @@ class RemoteVisionServer:
                 break
 
     def _recv_exact(self, size: int) -> Optional[bytes]:
-        """Receive exactly size bytes."""
+        """
+        Receive exactly size bytes, or give up.
+
+        A peer that goes quiet part way through a message is treated as gone.
+        Retrying here would loop forever and pin this single-client server.
+        """
         data = b''
         while len(data) < size:
             try:
@@ -411,7 +457,8 @@ class RemoteVisionServer:
                     return None
                 data += chunk
             except socket.timeout:
-                continue
+                print(f"[RemoteVisionServer] Client stalled after {len(data)}/{size} bytes")
+                return None
             except socket.error:
                 return None
         return data
@@ -441,7 +488,8 @@ class RemoteVisionServer:
         # Pack gesture data
         if gesture:
             gesture_id = GESTURE_IDS.get(gesture.gesture, 0)
-            confidence = min(max(int(gesture.confidence * 100), 0), 0xFF)
+            confidence = min(max(int(gesture.confidence * _CONFIDENCE_SCALE), 0),
+                             _CONFIDENCE_SCALE)
         else:
             gesture_id = 0
             confidence = 0

@@ -24,6 +24,7 @@ import time
 import cv2
 import atexit
 import base64
+import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -36,16 +37,22 @@ from ainex_api.head import PAN_MIN, PAN_MAX, TILT_MIN, TILT_MAX
 robot: Robot = None
 shutdown_done = False
 
+# Every browser tab gets its own timer, and each runs grab_frame in a worker
+# thread. One Robot, one MediaPipe model, so both accesses are serialized.
+_robot_lock = threading.Lock()
+_vision_lock = threading.Lock()
+
 # Debug overlay flags - module level, shared by all
 debug_overlay = {'face': False, 'gesture': False, 'pose': False}
 
 
 def get_robot() -> Robot:
     global robot
-    if robot is None:
-        robot = Robot()
-        robot.vision.start()
-    return robot
+    with _robot_lock:
+        if robot is None:
+            robot = Robot()
+            robot.vision.start()
+        return robot
 
 
 def graceful_shutdown():
@@ -78,18 +85,17 @@ def grab_frame() -> bytes:
     """Capture frame, apply overlays, return as JPEG bytes."""
     r = get_robot()
 
-    # Update vision (capture + detection)
-    r.vision.update()
+    with _vision_lock:
+        r.vision.update()
 
-    # Get frame with or without debug overlays
-    if debug_overlay['face'] or debug_overlay['gesture'] or debug_overlay['pose']:
-        frame = r.vision.draw_debug(
-            face=debug_overlay['face'],
-            gesture=debug_overlay['gesture'],
-            pose=debug_overlay['pose']
-        )
-    else:
-        frame = r.vision.get_frame()
+        if debug_overlay['face'] or debug_overlay['gesture'] or debug_overlay['pose']:
+            frame = r.vision.draw_debug(
+                face=debug_overlay['face'],
+                gesture=debug_overlay['gesture'],
+                pose=debug_overlay['pose']
+            )
+        else:
+            frame = r.vision.get_frame()
 
     if frame is None:
         return None

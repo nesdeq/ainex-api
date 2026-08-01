@@ -9,8 +9,8 @@ from typing import Dict, List, Optional, Tuple
 from .board import Board, BUS_SERVO_POSITION_MIN, BUS_SERVO_POSITION_MAX
 
 
-# AINEX servo mapping (servo_id: name)
-# FROM: /home/qp/playground/artemis/docs/servo.md (AUTHORITATIVE SOURCE)
+# AINEX servo mapping (servo_id: name). Authoritative; the README table and the
+# d6a column order both follow this.
 SERVO_MAP = {
     # Left Leg (odd: 1,3,5,7,9,11)
     1: 'l_ankle_roll',

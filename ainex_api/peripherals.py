@@ -27,7 +27,8 @@ class Peripherals:
         Play a single beep.
 
         Args:
-            freq: Frequency in Hz (100-10000)
+            freq: Frequency in Hz; only the field width is checked, so values
+                  outside the buzzer's usable band simply produce nothing
             duration: Duration in seconds
         """
         self.board.set_buzzer(freq, duration, 0, 1)

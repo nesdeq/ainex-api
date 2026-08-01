@@ -72,7 +72,20 @@ class MotionPlayer:
         self._cache: Dict[str, Motion] = {}
 
         # Timing (0.8 = wait 80% of duration, faster transitions)
-        self.timing_multiplier = 0.8
+        self._timing_multiplier = 0.8
+
+    @property
+    def timing_multiplier(self) -> float:
+        """Fraction of each frame's duration to wait before sending the next"""
+        return self._timing_multiplier
+
+    @timing_multiplier.setter
+    def timing_multiplier(self, value: float):
+        # Rejected here rather than inside the playback thread, where a negative
+        # sleep would abort the motion mid-move with no signal to the caller.
+        if value < 0:
+            raise ValueError(f"timing_multiplier={value} must not be negative")
+        self._timing_multiplier = value
 
     @property
     def is_playing(self) -> bool:
@@ -106,7 +119,7 @@ class MotionPlayer:
         # Load from database
         try:
             conn = sqlite3.connect(path)
-            cursor = conn.execute("SELECT * FROM ActionGroup")
+            cursor = conn.execute("SELECT * FROM ActionGroup ORDER BY [Index]")
             frames = []
 
             for row in cursor:
@@ -190,10 +203,13 @@ class MotionPlayer:
                 self._current_motion = None
 
     def _play_async(self, motion: Motion, on_complete: Optional[Callable]):
-        """Asynchronous playback"""
+        """Asynchronous playback; a failing callback must not escape the thread"""
         self._play_sync(motion)
         if on_complete:
-            on_complete()
+            try:
+                on_complete()
+            except Exception as e:
+                print(f"[Motion] on_complete callback for {motion.name} raised: {e}")
 
     def stop(self):
         """Stop current motion"""

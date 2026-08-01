@@ -17,12 +17,26 @@ from .camera import Camera
 from .vision import VisionSystem
 
 
-# Arm position constants (servo_id: position)
-# Eliminates duplication across raise/lower methods
+# Arm poses shared by the raise/lower methods (servo_id: position)
 _LEFT_ARM_NEUTRAL = {13: 835, 15: 830, 17: 500, 19: 150}
 _LEFT_ARM_RAISED = {13: 360, 15: 830, 17: 500, 19: 40}
 _RIGHT_ARM_NEUTRAL = {14: 165, 16: 170, 18: 500, 20: 850}
 _RIGHT_ARM_RAISED = {14: 640, 16: 165, 18: 500, 20: 960}
+
+_MIN_PORT, _MAX_PORT = 1, 65535
+
+
+def _parse_vision_address(address: str) -> tuple:
+    """Split a remote vision "host:port" string, rejecting anything malformed."""
+    host, _, port = address.partition(':')
+    if not host or not port:
+        raise ValueError(f"remote_vision={address!r} is not in host:port form")
+    if not port.isdigit():
+        raise ValueError(f"remote_vision port {port!r} is not a number")
+    port = int(port)
+    if not _MIN_PORT <= port <= _MAX_PORT:
+        raise ValueError(f"remote_vision port {port} outside {_MIN_PORT}-{_MAX_PORT}")
+    return host, port
 
 
 class Robot:
@@ -54,39 +68,51 @@ class Robot:
                           If set, camera frames are sent to remote PC for processing.
                           Run server on PC with: python -m ainex_api.remote_vision --port 9999
         """
-        # Initialize board connection
+        # Parsed before any hardware is opened, so a malformed address cannot
+        # leave an open serial port and a live receiver thread behind.
+        host, port = _parse_vision_address(remote_vision) if remote_vision else (None, None)
+
         self.board = Board(device=device)
 
-        # Initialize subsystems
-        self.servos = ServoController(self.board)
-        self.head = HeadController(self.board)
-        self.motion = MotionPlayer(self.board)
-        self.sensors = SensorReader(self.board)
-        self.peripherals = Peripherals(self.board)
+        # Anything that fails past this point must still release the port.
+        try:
+            self.servos = ServoController(self.board)
+            self.head = HeadController(self.board)
+            self.motion = MotionPlayer(self.board)
+            self.sensors = SensorReader(self.board)
+            self.peripherals = Peripherals(self.board)
 
-        # Camera and vision
-        self._camera = Camera(undistort=undistort_camera, distortion_k1=distortion_k1)
+            self._camera = Camera(undistort=undistort_camera, distortion_k1=distortion_k1)
 
-        if remote_vision:
-            # Remote mode: send frames to PC for processing
-            from .remote_vision import RemoteVisionClient
-            host, port = remote_vision.split(':')
-            self.vision = RemoteVisionClient(host, int(port), self._camera)
-            self._vision_mode = 'remote'
-        else:
-            # Local mode: run MediaPipe on robot
-            self.vision = VisionSystem(self._camera)
-            self._vision_mode = 'local'
+            if remote_vision:
+                from .remote_vision import RemoteVisionClient
+                self.vision = RemoteVisionClient(host, port, self._camera)
+                self._vision_mode = 'remote'
+            else:
+                self.vision = VisionSystem(self._camera)
+                self._vision_mode = 'local'
+        except Exception:
+            self.board.close()
+            raise
 
         self._last_pose = None
 
-    def close(self):
-        """Cleanup and close connections"""
+    def close(self) -> bool:
+        """
+        Cleanup and close connections.
+
+        Returns:
+            True if the motion stopped before the port was closed, False if it
+            was still running and the shutdown went ahead anyway.
+        """
         self.motion.stop()
-        self.motion.wait(timeout=MOTION_STOP_TIMEOUT_S)
+        stopped = self.motion.wait(timeout=MOTION_STOP_TIMEOUT_S)
+        if not stopped:
+            print(f"[Robot] Motion did not stop within {MOTION_STOP_TIMEOUT_S}s; closing anyway")
         self.sensors.stop()
         self.vision.stop()
         self.board.close()
+        return stopped
 
     def __enter__(self):
         return self
@@ -98,12 +124,10 @@ class Robot:
 
     def stand(self, blocking: bool = True):
         """Stand in default pose (stand.d6a)"""
-        self._last_pose = 'stand'
         return self.play('stand', blocking)
 
     def stand_low(self, blocking: bool = True):
         """Stand in low/crouched pose (stand_low.d6a)"""
-        self._last_pose = 'stand_low'
         return self.play('stand_low', blocking)
 
     def zero(self, duration: float = 1.0):
@@ -124,7 +148,10 @@ class Robot:
 
     def play(self, motion_name: str, blocking: bool = True) -> bool:
         """Play a motion sequence from d6a file"""
-        return self.motion.play(motion_name, blocking)
+        started = self.motion.play(motion_name, blocking)
+        if started:
+            self._last_pose = motion_name
+        return started
 
     def greet(self, blocking: bool = True):
         """Play greeting motion (greet.d6a)"""

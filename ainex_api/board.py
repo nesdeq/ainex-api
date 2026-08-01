@@ -75,6 +75,10 @@ BUS_SERVO_POSITION_MAX = 1000
 PWM_SERVO_POSITION_MIN = 500
 PWM_SERVO_POSITION_MAX = 2500
 
+# Motor speed is a signed fraction of full scale.
+MOTOR_SPEED_MIN = -1.0
+MOTOR_SPEED_MAX = 1.0
+
 _GAMEPAD_STRUCT = struct.Struct("<HB4b")
 _IMU_9AXIS = struct.Struct("<9f")
 _IMU_6AXIS = struct.Struct("<6f")
@@ -116,7 +120,8 @@ class Board:
     Low-level board communication.
 
     Handles serial protocol with STM32 controller.
-    Thread-safe with background receiver thread.
+    Commands may be issued from any thread: writes are serialized so two callers
+    cannot interleave bytes, and a background thread parses incoming frames.
     """
 
     def __init__(self, device: str = "/dev/ttyAMA0", baudrate: int = 1000000, timeout: float = 5.0,
@@ -147,8 +152,10 @@ class Board:
             PacketFunction.PWM_SERVO: queue.Queue(maxsize=2),
         }
 
-        # Read lock
+        # Read lock, and the write lock that keeps concurrent callers from
+        # interleaving bytes of two packets on the wire.
         self._servo_lock = threading.Lock()
+        self._write_lock = threading.Lock()
 
         # Parser state
         self._state = 0
@@ -171,10 +178,11 @@ class Board:
         self._recv_enabled = enable
 
     def _write(self, func: PacketFunction, data: bytes):
-        """Write packet to serial port"""
+        """Write one packet to the serial port as an indivisible unit"""
         buf = bytes([0xAA, 0x55, int(func), len(data)]) + data
         buf += bytes([crc8(buf[2:])])
-        self.port.write(buf)
+        with self._write_lock:
+            self.port.write(buf)
 
     def _recv_loop(self):
         """Background thread for receiving packets"""
@@ -199,7 +207,10 @@ class Board:
             if byte == 0xAA:
                 self._state = 1
         elif self._state == 1:  # Start byte 2
-            self._state = 2 if byte == 0x55 else 0
+            if byte == 0x55:
+                self._state = 2
+            elif byte != 0xAA:
+                self._state = 0   # a repeated 0xAA may still start the real preamble
         elif self._state == 2:  # Function
             if byte in FUNCTION_CODES:
                 self._frame = [byte, 0]
@@ -276,10 +287,16 @@ class Board:
         time.sleep(0.02)
 
     def bus_servo_set_angle_limit(self, servo_id: int, min_angle: int, max_angle: int):
-        """Set servo angle limits (0-1000)"""
+        """Set servo angle limits, both within the 0-1000 command range"""
         _u8("servo_id", servo_id)
-        _u16("min_angle", min_angle)
-        _u16("max_angle", max_angle)
+        for name, angle in (("min_angle", min_angle), ("max_angle", max_angle)):
+            if not BUS_SERVO_POSITION_MIN <= angle <= BUS_SERVO_POSITION_MAX:
+                raise ValueError(f"{name}={angle} outside "
+                                 f"{BUS_SERVO_POSITION_MIN}-{BUS_SERVO_POSITION_MAX} "
+                                 f"for servo {servo_id}")
+        if min_angle > max_angle:
+            raise ValueError(f"min_angle={min_angle} exceeds max_angle={max_angle} "
+                             f"for servo {servo_id}")
         self._write(PacketFunction.BUS_SERVO, struct.pack("<BBHH", 0x30, servo_id, min_angle, max_angle))
         time.sleep(0.02)
 
@@ -390,6 +407,10 @@ class Board:
         _u8("motor count", len(speeds))
         data = bytes([0x01, len(speeds)])
         for motor_id, speed in speeds:
+            if not MOTOR_SPEED_MIN <= speed <= MOTOR_SPEED_MAX:
+                raise ValueError(f"Speed {speed} outside "
+                                 f"{MOTOR_SPEED_MIN}-{MOTOR_SPEED_MAX} "
+                                 f"for motor {motor_id}")
             data += struct.pack("<Bf", _u8("motor_id", motor_id - 1), speed)
         self._write(PacketFunction.MOTOR, data)
 
