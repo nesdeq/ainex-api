@@ -287,7 +287,7 @@ class Board:
         """
         Read bus servo data with retry.
 
-        Replies carry an echo of the command and servo id; anything that does not
+        Replies are [servo id, command, status, value]; anything that does not
         match this request is a straggler from an earlier one and is discarded.
         """
         _u8("servo_id", servo_id)
@@ -305,9 +305,9 @@ class Board:
                     result = struct.unpack(fmt, data)
                 except (queue.Empty, struct.error):
                     continue
-                if result[0] != cmd:
+                if result[1] != cmd:
                     continue
-                if servo_id != BROADCAST_SERVO_ID and result[1] != servo_id:
+                if servo_id != BROADCAST_SERVO_ID and result[0] != servo_id:
                     continue
                 if result[2] == 0:  # Success
                     return result[3:]
