@@ -30,6 +30,14 @@ from .camera import Camera
 MAGIC_FRAME = b'\xAA\x55'
 MAGIC_RESULT = b'\x55\xAA'
 
+# Frames arrive from the network. A 640x480 JPEG at quality 80 runs 30-60 KB;
+# this caps the buffer a client can make the server allocate.
+MAX_JPEG_BYTES = 4 * 1024 * 1024
+
+# Domain of the result struct's coordinate fields.
+_I16_MIN, _I16_MAX = -32768, 32767
+_U16_MAX = 65535
+
 # Gesture ID mapping
 GESTURE_IDS = {
     'none': 0,
@@ -103,7 +111,7 @@ class RemoteVisionClient:
         if self._connected:
             return True
 
-        now = time.time()
+        now = time.monotonic()
         if now - self._last_reconnect < self._reconnect_interval:
             return False
 
@@ -319,13 +327,15 @@ class RemoteVisionServer:
                 # Accept connection
                 self._socket.settimeout(1.0)
                 try:
+                    if self._client:
+                        self._client.close()
                     self._client, addr = self._socket.accept()
                     self._client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                     print(f"[RemoteVisionServer] Client connected: {addr}")
                 except socket.timeout:
                     continue
 
-                self._start_time = time.time()
+                self._start_time = time.monotonic()
                 self._frames_processed = 0
 
                 # Process frames from this client
@@ -357,6 +367,11 @@ class RemoteVisionServer:
                     print(f"[RemoteVisionServer] Bad magic: {magic}")
                     break
 
+                if not 0 < jpeg_len <= MAX_JPEG_BYTES:
+                    print(f"[RemoteVisionServer] Rejecting frame: jpeg_len={jpeg_len} "
+                          f"(limit {MAX_JPEG_BYTES})")
+                    break
+
                 # Receive JPEG data
                 jpeg_data = self._recv_exact(jpeg_len)
                 if not jpeg_data:
@@ -382,11 +397,11 @@ class RemoteVisionServer:
 
                 # Stats every 100 frames
                 if self._frames_processed % 100 == 0:
-                    elapsed = time.time() - self._start_time
+                    elapsed = time.monotonic() - self._start_time
                     fps = self._frames_processed / elapsed
                     print(f"[RemoteVisionServer] {self._frames_processed} frames, {fps:.1f} FPS")
 
-            except (socket.error, ConnectionError) as e:
+            except (socket.error, ConnectionError, struct.error) as e:
                 print(f"[RemoteVisionServer] Client error: {e}")
                 break
 
@@ -418,16 +433,20 @@ class RemoteVisionServer:
 
     def _send_result(self, frame_id: int, face: Optional[FaceData], gesture: Optional[GestureData]):
         """Send detection result to client."""
-        # Pack face data
+        # Pack face data; the client controls the frame size, so pin every
+        # coordinate to the field domain rather than letting the pack raise.
         if face:
-            face_x, face_y, face_w, face_h = face.x, face.y, face.width, face.height
+            face_x = min(max(face.x, _I16_MIN), _I16_MAX)
+            face_y = min(max(face.y, _I16_MIN), _I16_MAX)
+            face_w = min(max(face.width, 0), _U16_MAX)
+            face_h = min(max(face.height, 0), _U16_MAX)
         else:
             face_x, face_y, face_w, face_h = 0, 0, 0, 0
 
         # Pack gesture data
         if gesture:
             gesture_id = GESTURE_IDS.get(gesture.gesture, 0)
-            confidence = int(gesture.confidence * 100)
+            confidence = min(max(int(gesture.confidence * 100), 0), 0xFF)
         else:
             gesture_id = 0
             confidence = 0

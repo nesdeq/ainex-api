@@ -15,6 +15,11 @@ from dataclasses import dataclass
 from .board import Board
 
 
+# Bounds the wait in Robot.close(); the player only checks its stop flag between
+# frames, and the longest frame shipped in motions/ is 2000 ms.
+MOTION_STOP_TIMEOUT_S = 3.0
+
+
 @dataclass
 class MotionFrame:
     """Single frame of a motion sequence"""
@@ -55,10 +60,12 @@ class MotionPlayer:
             os.path.dirname(__file__), 'motions'
         )
 
-        # Playback state
+        # Playback state, guarded by _state_lock so only one motion can start
+        self._state_lock = threading.Lock()
         self._playing = False
         self._stop_requested = False
         self._current_motion: Optional[str] = None
+        self._thread: Optional[threading.Thread] = None
 
         # Motion cache
         self._cache: Dict[str, Motion] = {}
@@ -135,31 +142,33 @@ class MotionPlayer:
         Returns:
             True if motion started, False if not found or already playing
         """
-        if self._playing:
-            return False
-
         motion = self.load(name)
         if motion is None:
             return False
 
+        # Claim playback before returning, so a caller cannot slip a second
+        # motion in while the playback thread is still starting up.
+        with self._state_lock:
+            if self._playing:
+                return False
+            self._playing = True
+            self._current_motion = motion.name
+            self._stop_requested = False
+
         if blocking:
             self._play_sync(motion)
         else:
-            thread = threading.Thread(
+            self._thread = threading.Thread(
                 target=self._play_async,
                 args=(motion, on_complete),
                 daemon=True
             )
-            thread.start()
+            self._thread.start()
 
         return True
 
     def _play_sync(self, motion: Motion):
-        """Synchronous playback"""
-        self._playing = True
-        self._current_motion = motion.name
-        self._stop_requested = False
-
+        """Synchronous playback; play() has already claimed the playback state"""
         try:
             for frame in motion.frames:
                 if self._stop_requested:
@@ -175,8 +184,9 @@ class MotionPlayer:
                 time.sleep(wait_time)
 
         finally:
-            self._playing = False
-            self._current_motion = None
+            with self._state_lock:
+                self._playing = False
+                self._current_motion = None
 
     def _play_async(self, motion: Motion, on_complete: Optional[Callable]):
         """Asynchronous playback"""
@@ -198,9 +208,9 @@ class MotionPlayer:
         Returns:
             True if motion completed, False if timeout
         """
-        start = time.time()
+        start = time.monotonic()
         while self._playing:
-            if timeout and (time.time() - start) > timeout:
+            if timeout is not None and (time.monotonic() - start) > timeout:
                 return False
             time.sleep(0.01)
         return True

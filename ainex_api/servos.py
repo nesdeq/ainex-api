@@ -5,8 +5,8 @@ Servo Controller
 High-level servo control with named joints and body mapping.
 """
 
-from typing import Dict, List, Optional
-from .board import Board
+from typing import Dict, List, Optional, Tuple
+from .board import Board, BUS_SERVO_POSITION_MIN, BUS_SERVO_POSITION_MAX
 
 
 # AINEX servo mapping (servo_id: name)
@@ -50,6 +50,31 @@ NAME_TO_ID = {v: k for k, v in SERVO_MAP.items()}
 BODY_SERVO_IDS = list(range(1, 23))
 ALL_SERVO_IDS = list(range(1, 25))
 
+SERVO_POSITION_MIN = BUS_SERVO_POSITION_MIN
+SERVO_POSITION_MAX = BUS_SERVO_POSITION_MAX
+SERVO_CENTER = 500
+
+# Servos whose mechanical travel is narrower than the full command range.
+SERVO_LIMITS = {
+    23: (125, 875),   # head_pan
+    24: (315, 625),   # head_tilt
+}
+
+
+def servo_limits(servo_id: int) -> Tuple[int, int]:
+    """Travel limits for a servo, defaulting to the full command range."""
+    return SERVO_LIMITS.get(servo_id, (SERVO_POSITION_MIN, SERVO_POSITION_MAX))
+
+
+def check_position(servo_id: int, position: int) -> int:
+    """Reject unknown servo IDs and positions outside the servo's travel."""
+    if servo_id not in SERVO_MAP:
+        raise ValueError(f"Unknown servo id: {servo_id}")
+    low, high = servo_limits(servo_id)
+    if not low <= position <= high:
+        raise ValueError(f"Position {position} outside {low}-{high} for servo {servo_id}")
+    return position
+
 
 class ServoController:
     """
@@ -67,9 +92,10 @@ class ServoController:
 
         Args:
             servo_id: Servo ID (1-24)
-            position: Target position (0-1000)
+            position: Target position (0-1000, narrower for the head servos)
             duration: Movement time in seconds
         """
+        check_position(servo_id, position)
         self.board.bus_servo_set_position(duration, [[servo_id, position]])
 
     def set_positions(self, positions: Dict[int, int], duration: float = 0.5):
@@ -80,7 +106,7 @@ class ServoController:
             positions: Dict of {servo_id: position}
             duration: Movement time in seconds
         """
-        pos_list = [[k, v] for k, v in positions.items()]
+        pos_list = [[k, check_position(k, v)] for k, v in positions.items()]
         self.board.bus_servo_set_position(duration, pos_list)
 
     def set_by_name(self, name: str, position: int, duration: float = 0.5):
@@ -107,7 +133,7 @@ class ServoController:
         """
         if len(positions) != 22:
             raise ValueError(f"Expected 22 positions, got {len(positions)}")
-        pos_list = [[i + 1, positions[i]] for i in range(22)]
+        pos_list = [[i + 1, check_position(i + 1, positions[i])] for i in range(22)]
         self.board.bus_servo_set_position(duration, pos_list)
 
     def get_position(self, servo_id: int, use_cache: bool = False) -> Optional[int]:

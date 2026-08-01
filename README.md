@@ -106,14 +106,17 @@ robot.servos.get_servo_name(13)     # 'l_shoulder_pitch'
 robot.servos.get_servo_id('l_shoulder_pitch')  # 13
 
 # Sensors
-robot.start_sensors()
-robot.get_battery()                 # Percentage
-robot.sensors.get_imu()             # IMUData
-robot.sensors.get_battery_voltage() # mV
+robot.get_battery()                 # Percentage, or None
+robot.get_battery_status()          # 'ok' | 'low' | 'critical', or None
+robot.sensors.get_battery_state()   # BatteryState(voltage_mv, percent, status) from one reading
+robot.sensors.get_imu()             # IMUData or None
+robot.sensors.get_battery_voltage() # mV or None
+robot.sensors.get_battery_voltage_smoothed()  # mV, median of last 5; None until 5 arrive
 robot.sensors.get_button()          # ButtonEvent or None
 robot.sensors.on_button(callback)   # Register callback
-robot.sensors.get_gamepad()         # (axes, buttons) or None
+robot.start_sensors()               # Only needed to run on_button callbacks
 robot.stop_sensors()
+robot.sensors.get_gamepad()         # (axes, buttons) or None
 
 # Peripherals
 robot.beep(freq=2000, duration=0.1)
@@ -181,6 +184,12 @@ cap, width, height = open_camera()
 | Serial | `/dev/ttyAMA0` | 1M baud, Pi GPIO UART to STM32 |
 | Camera | `/dev/usb_cam` | 640x480 (symlink from udev) |
 | Servos | Bus servos | Position 0-1000, center=500 |
+| Head | Servos 23/24 | Pan 125-875, tilt 315-625; enforced on every write path |
+| Battery | 3S LiPo | 11.1V 3500mAh, 12.6V full, recharge at 10.5V, stop at 9.9V |
+
+Sensor reads older than 15 s report `None` rather than a stale value. Servo writes outside a
+servo's travel raise `ValueError`; percentage is an estimate from a resting discharge curve and
+reads low under load.
 
 ## Servo Map
 

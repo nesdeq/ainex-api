@@ -176,7 +176,7 @@ class Camera:
             self._init_undistort_maps()
 
         self._running = True
-        self._start_time = time.time()
+        self._start_time = time.monotonic()
         self._thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._thread.start()
 
@@ -229,7 +229,7 @@ class Camera:
     def fps(self) -> float:
         """Get current capture FPS"""
         if self._start_time and self._frame_count > 0:
-            elapsed = time.time() - self._start_time
+            elapsed = time.monotonic() - self._start_time
             return self._frame_count / elapsed if elapsed > 0 else 0
         return 0
 

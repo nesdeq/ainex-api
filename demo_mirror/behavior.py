@@ -79,8 +79,8 @@ class BehaviorController:
             self.robot.head.track_point(face.x, face.y)
         else:
             if self._face_lost_time is None:
-                self._face_lost_time = time.time()
-            elif time.time() - self._face_lost_time > self._face_timeout:
+                self._face_lost_time = time.monotonic()
+            elif time.monotonic() - self._face_lost_time > self._face_timeout:
                 if self.current_state != RobotState.IDLE:
                     self._transition(RobotState.IDLE)
 
@@ -96,7 +96,7 @@ class BehaviorController:
 
     def _act_on_gesture(self, gesture_type: str):
         """Execute action for confirmed gesture."""
-        now = time.time()
+        now = time.monotonic()
         cooldown_ok = now - self._last_action_time > self._action_cooldown
 
         # Actions that need cooldown
@@ -112,16 +112,18 @@ class BehaviorController:
         if gesture_type == self._current_pose:
             return
 
+        # Mirrored, not copied: the user's left hand raises the robot's right arm,
+        # so the raised arm appears on the same side as the user's.
         if gesture_type == 'left_hand_raised':
             print(f"[MIRROR] -> left_hand_raised")
             self._current_pose = gesture_type
-            self.robot.raise_left_arm(duration=0.8)
+            self.robot.raise_right_arm(duration=0.8)
             self.stats['gestures_mirrored'] += 1
 
         elif gesture_type == 'right_hand_raised':
             print(f"[MIRROR] -> right_hand_raised")
             self._current_pose = gesture_type
-            self.robot.raise_right_arm(duration=0.8)
+            self.robot.raise_left_arm(duration=0.8)
             self.stats['gestures_mirrored'] += 1
 
         elif gesture_type == 'both_hands_raised':

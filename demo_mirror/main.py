@@ -12,6 +12,7 @@ import signal
 import argparse
 
 from ainex_api import Robot
+from ainex_api.motion import MOTION_STOP_TIMEOUT_S
 
 from .behavior import BehaviorController
 
@@ -108,11 +109,11 @@ class DemoMirror:
         print()
 
         frame_count = 0
-        start_time = time.time()
+        start_time = time.monotonic()
 
         try:
             while self.running:
-                loop_start = time.time()
+                loop_start = time.monotonic()
                 frame_count += 1
 
                 # Update vision (captures frame, runs detection)
@@ -131,7 +132,7 @@ class DemoMirror:
 
                 # Status output every 3 seconds
                 if frame_count % (self.loop_rate * 3) == 0:
-                    elapsed = time.time() - start_time
+                    elapsed = time.monotonic() - start_time
                     fps = frame_count / elapsed
                     state = self.behavior.current_state.name
                     gesture = self.robot.vision.get_gesture()
@@ -140,7 +141,7 @@ class DemoMirror:
                     print(f"[{elapsed:.0f}s] FPS:{fps:.1f} State:{state} Face:{face is not None} Gesture:{g}")
 
                 # Rate limiting
-                elapsed = time.time() - loop_start
+                elapsed = time.monotonic() - loop_start
                 if elapsed < self._loop_period:
                     time.sleep(self._loop_period - elapsed)
 
@@ -160,9 +161,12 @@ class DemoMirror:
         print(f"Gestures mirrored: {stats['gestures_mirrored']}")
         print(f"State transitions: {stats['state_transitions']}")
 
-        # Reset hardware
+        # Reset hardware. Stop first: play() refuses while a motion is in flight.
         print("[Cleanup] Returning to stand pose...")
-        self.robot.stand()
+        self.robot.motion.stop()
+        self.robot.motion.wait(timeout=MOTION_STOP_TIMEOUT_S)
+        if not self.robot.stand():
+            print("[Cleanup] WARNING: stand pose refused")
         time.sleep(1.0)
 
         print("[Cleanup] Centering head...")

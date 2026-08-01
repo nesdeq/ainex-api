@@ -86,7 +86,7 @@ def test_roundtrip(host: str, port: int, cap, frame) -> bool:
 
         header = struct.pack('<2sIHHI', MAGIC_FRAME, 1, w, h, len(jpeg_bytes))
 
-        start = time.time()
+        start = time.monotonic()
         s.sendall(header + jpeg_bytes)
 
         data = b''
@@ -96,7 +96,7 @@ def test_roundtrip(host: str, port: int, cap, frame) -> bool:
                 raise ConnectionError("Server closed")
             data += chunk
 
-        elapsed = (time.time() - start) * 1000
+        elapsed = (time.monotonic() - start) * 1000
 
         magic, frame_id, face_x, face_y, face_w, face_h, gesture_id, conf = \
             RESULT_STRUCT.unpack(data)
@@ -143,7 +143,7 @@ def test_latency(host: str, port: int, cap, count: int = 20) -> bool:
 
             header = struct.pack('<2sIHHI', MAGIC_FRAME, i, w, h, len(jpeg_bytes))
 
-            start = time.time()
+            start = time.monotonic()
             s.sendall(header + jpeg_bytes)
 
             data = b''
@@ -154,7 +154,7 @@ def test_latency(host: str, port: int, cap, count: int = 20) -> bool:
                 data += chunk
 
             if len(data) == RESULT_SIZE:
-                latencies.append((time.time() - start) * 1000)
+                latencies.append((time.monotonic() - start) * 1000)
 
         s.close()
 

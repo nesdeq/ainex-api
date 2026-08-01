@@ -10,7 +10,7 @@ from typing import Optional
 from .board import Board
 from .servos import ServoController
 from .head import HeadController
-from .motion import MotionPlayer
+from .motion import MotionPlayer, MOTION_STOP_TIMEOUT_S
 from .sensors import SensorReader
 from .peripherals import Peripherals
 from .camera import Camera
@@ -82,6 +82,8 @@ class Robot:
 
     def close(self):
         """Cleanup and close connections"""
+        self.motion.stop()
+        self.motion.wait(timeout=MOTION_STOP_TIMEOUT_S)
         self.sensors.stop()
         self.vision.stop()
         self.board.close()
@@ -222,6 +224,10 @@ class Robot:
         """Get battery percentage"""
         return self.sensors.get_battery_percent()
 
+    def get_battery_status(self) -> Optional[str]:
+        """Get battery level as 'ok', 'low' or 'critical'"""
+        return self.sensors.get_battery_status()
+
     def start_sensors(self):
         """Start sensor polling"""
         self.sensors.start()
@@ -234,9 +240,12 @@ class Robot:
 
     def status(self) -> dict:
         """Get robot status"""
+        battery = self.sensors.get_battery_state()
         return {
             'connected': self.board.port.is_open,
-            'battery': self.sensors.get_battery_percent(),
+            'battery': battery.percent if battery else None,
+            'battery_voltage': battery.voltage_mv if battery else None,
+            'battery_status': battery.status if battery else None,
             'last_pose': self._last_pose,
             'motion_playing': self.motion.is_playing,
             'current_motion': self.motion.current_motion,
@@ -251,7 +260,11 @@ class Robot:
         print("AINEX Robot Status")
         print("=" * 40)
         print(f"Connected: {s['connected']}")
-        print(f"Battery: {s['battery']:.1f}%" if s['battery'] else "Battery: N/A")
+        if s['battery'] is None:
+            print("Battery: N/A")
+        else:
+            print(f"Battery: {s['battery']:.1f}% "
+                  f"({s['battery_voltage'] / 1000:.2f}V, {s['battery_status']})")
         print(f"Last Pose: {s['last_pose']}")
         print(f"Motion Playing: {s['motion_playing']}")
         print(f"Available Motions: {len(s['available_motions'])}")

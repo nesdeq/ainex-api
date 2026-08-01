@@ -105,13 +105,23 @@ class FaceAnalyzer:
         eye_dist = abs(left_eye.x - right_eye.x) * width
         face_size = int(eye_dist * 2.5) if eye_dist > 10 else 80
 
+        # Landmarks are extrapolated past the frame edge; a tracking target
+        # outside the image is meaningless, so pin it to the border.
         return FaceData(
-            x=int(nose.x * width),
-            y=int(nose.y * height),
+            x=min(max(int(nose.x * width), 0), width - 1),
+            y=min(max(int(nose.y * height), 0), height - 1),
             width=face_size,
             height=face_size,
             timestamp=time.time()
         )
+
+
+# A landmark below this is a guess at an occluded joint, not an observation.
+MIN_LANDMARK_VISIBILITY = 0.4
+WAVE_MIN_VISIBILITY = 0.5
+
+# Wrist clearance above the shoulder, in normalised frame height, for a raise.
+RAISE_MARGIN = 0.12
 
 
 class GestureAnalyzer:
@@ -212,11 +222,11 @@ class GestureAnalyzer:
         rw = lm[mp_pose.PoseLandmark.RIGHT_WRIST]     # 16
 
         # Need visible shoulders for gesture detection
-        if ls.visibility < 0.4 or rs.visibility < 0.4:
+        if ls.visibility < MIN_LANDMARK_VISIBILITY or rs.visibility < MIN_LANDMARK_VISIBILITY:
             return self._confirm('none')
 
         # Track angle + wrist x ONLY when in wave position
-        if le.visibility > 0.4 and lw.visibility > 0.4:
+        if le.visibility > MIN_LANDMARK_VISIBILITY and lw.visibility > MIN_LANDMARK_VISIBILITY:
             if self._in_wave_position(lw, le, ls):
                 self._elbow_angle_history['left'].append(self._calc_elbow_angle(ls, le, lw))
                 self._wrist_x_history['left'].append(lw.x)
@@ -224,7 +234,7 @@ class GestureAnalyzer:
                 self._elbow_angle_history['left'].clear()
                 self._wrist_x_history['left'].clear()
 
-        if re.visibility > 0.4 and rw.visibility > 0.4:
+        if re.visibility > MIN_LANDMARK_VISIBILITY and rw.visibility > MIN_LANDMARK_VISIBILITY:
             if self._in_wave_position(rw, re, rs):
                 self._elbow_angle_history['right'].append(self._calc_elbow_angle(rs, re, rw))
                 self._wrist_x_history['right'].append(rw.x)
@@ -238,9 +248,9 @@ class GestureAnalyzer:
         if self._is_waving(lm):
             return self._confirm('waving')
 
-        # 2. Hands raised - wrist above shoulder
-        left_up = lw.y < ls.y - 0.12
-        right_up = rw.y < rs.y - 0.12
+        # 2. Hands raised - visible wrist above shoulder
+        left_up = lw.visibility >= MIN_LANDMARK_VISIBILITY and lw.y < ls.y - RAISE_MARGIN
+        right_up = rw.visibility >= MIN_LANDMARK_VISIBILITY and rw.y < rs.y - RAISE_MARGIN
 
         if left_up and right_up:
             return self._confirm('both_hands_raised')
@@ -273,7 +283,7 @@ class GestureAnalyzer:
         ]
 
         for hand, wrist, elbow, shoulder in checks:
-            if wrist.visibility < 0.5 or elbow.visibility < 0.5:
+            if wrist.visibility < WAVE_MIN_VISIBILITY or elbow.visibility < WAVE_MIN_VISIBILITY:
                 continue
 
             if not self._in_wave_position(wrist, elbow, shoulder):

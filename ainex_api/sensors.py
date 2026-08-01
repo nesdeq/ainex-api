@@ -6,10 +6,58 @@ High-level interface for robot sensors.
 """
 
 import time
+import statistics
 import threading
+from collections import deque
 from typing import Optional, Tuple, List, Callable
 from dataclasses import dataclass
 from .board import Board
+
+
+# AINEX ships an 11.1V 3500mAh 5C LiPo; its HX-35H bus servos run 9.0-12.6V
+CELL_COUNT = 3
+
+# Resting per-cell mV -> state of charge, descending. LiPo discharge is flat
+# between 3950 and 3770 mV, so a linear voltage map is wrong across most of it.
+DISCHARGE_CURVE = [
+    (4200, 100), (4150, 95), (4110, 90), (4080, 85), (4020, 80),
+    (3980, 75), (3950, 70), (3910, 65), (3870, 60), (3850, 55),
+    (3840, 50), (3820, 45), (3800, 40), (3790, 35), (3770, 30),
+    (3750, 25), (3730, 20), (3710, 15), (3690, 10), (3610, 5),
+    (3270, 0),
+]
+
+LOW_CELL_MV = 3500       # recharge now
+CRITICAL_CELL_MV = 3300  # stop and power down; 3000 damages cells
+SMOOTHING_SAMPLES = 5    # median window, rejects servo load sag
+
+# The board pushes battery and IMU packets unsolicited. Past this age a reading
+# is reported as unavailable rather than served stale, so a dead link cannot
+# masquerade as a healthy pack.
+SENSOR_TTL_S = 15.0
+
+
+def _status_for(cell_mv: float) -> str:
+    """Battery level for a per-cell voltage."""
+    if cell_mv <= CRITICAL_CELL_MV:
+        return 'critical'
+    if cell_mv <= LOW_CELL_MV:
+        return 'low'
+    return 'ok'
+
+
+def _interpolate_percent(cell_mv: float) -> float:
+    """State of charge for a per-cell voltage, interpolated over DISCHARGE_CURVE."""
+    if cell_mv >= DISCHARGE_CURVE[0][0]:
+        return 100.0
+    if cell_mv <= DISCHARGE_CURVE[-1][0]:
+        return 0.0
+
+    for (hi_mv, hi_pct), (lo_mv, lo_pct) in zip(DISCHARGE_CURVE, DISCHARGE_CURVE[1:]):
+        if cell_mv >= lo_mv:
+            ratio = (cell_mv - lo_mv) / (hi_mv - lo_mv)
+            return lo_pct + ratio * (hi_pct - lo_pct)
+    return 0.0
 
 
 @dataclass
@@ -42,6 +90,14 @@ class ButtonEvent:
     timestamp: float
 
 
+@dataclass
+class BatteryState:
+    """Battery voltage, charge and level, all derived from one reading."""
+    voltage_mv: float
+    percent: float
+    status: str  # 'ok', 'low' or 'critical'
+
+
 class SensorReader:
     """
     High-level sensor interface.
@@ -61,13 +117,15 @@ class SensorReader:
         self._button_thread: Optional[threading.Thread] = None
         self._running = False
 
-        # Last values
+        # Last values, with the monotonic time they arrived
         self._last_imu: Optional[IMUData] = None
+        self._last_imu_time: Optional[float] = None
         self._last_battery: Optional[int] = None
+        self._last_battery_time: Optional[float] = None
+        self._battery_window = deque(maxlen=SMOOTHING_SAMPLES)
 
     def start(self):
-        """Start sensor polling"""
-        self.board.enable_reception(True)
+        """Start button polling"""
         self._running = True
 
         if self._button_callback:
@@ -75,20 +133,24 @@ class SensorReader:
             self._button_thread.start()
 
     def stop(self):
-        """Stop sensor polling"""
+        """Stop button polling"""
         self._running = False
-        self.board.enable_reception(False)
 
     def get_imu(self) -> Optional[IMUData]:
         """
         Get latest IMU data.
 
         Returns:
-            IMUData or None if not available
+            IMUData, or None if nothing has arrived within SENSOR_TTL_S
         """
         data = self.board.get_imu()
+        now = time.monotonic()
         if data:
             self._last_imu = IMUData.from_tuple(data)
+            self._last_imu_time = now
+        elif self._last_imu_time is not None and now - self._last_imu_time > SENSOR_TTL_S:
+            self._last_imu = None
+            self._last_imu_time = None
         return self._last_imu
 
     def get_battery_voltage(self) -> Optional[int]:
@@ -96,28 +158,67 @@ class SensorReader:
         Get battery voltage in millivolts.
 
         Returns:
-            Voltage in mV or None
+            Voltage in mV, or None if nothing has arrived within SENSOR_TTL_S
         """
         voltage = self.board.get_battery()
+        now = time.monotonic()
         if voltage is not None:
             self._last_battery = voltage
+            self._last_battery_time = now
+            self._battery_window.append(voltage)
+        elif self._last_battery_time is not None and now - self._last_battery_time > SENSOR_TTL_S:
+            self._last_battery = None
+            self._last_battery_time = None
+            self._battery_window.clear()
         return self._last_battery
+
+    def get_battery_voltage_smoothed(self) -> Optional[float]:
+        """
+        Median of the last SMOOTHING_SAMPLES readings, in millivolts.
+
+        Servos under load sag the pack by a volt or more; the median rejects
+        those transients. It needs a full window to do so, so this returns None
+        until SMOOTHING_SAMPLES readings have arrived.
+        """
+        self.get_battery_voltage()
+        if len(self._battery_window) < SMOOTHING_SAMPLES:
+            return None
+        return statistics.median(self._battery_window)
+
+    def get_battery_state(self) -> Optional[BatteryState]:
+        """
+        Voltage, charge and level from a single reading.
+
+        Use this instead of the individual getters when reporting more than one
+        of them, so the three cannot describe different instants.
+        """
+        voltage = self.get_battery_voltage_smoothed()
+        if voltage is None:
+            return None
+        cell_mv = voltage / CELL_COUNT
+        return BatteryState(voltage_mv=voltage,
+                            percent=_interpolate_percent(cell_mv),
+                            status=_status_for(cell_mv))
 
     def get_battery_percent(self) -> Optional[float]:
         """
-        Get estimated battery percentage.
+        Get estimated state of charge for the 3S LiPo pack.
 
-        Based on typical 2S LiPo: 6.4V (0%) to 8.4V (100%)
+        Interpolates the resting discharge curve from the smoothed voltage.
+        Reads pessimistically while the robot is walking.
         """
-        voltage = self.get_battery_voltage()
-        if voltage is None:
-            return None
+        state = self.get_battery_state()
+        return state.percent if state else None
 
-        # Convert to percentage (2S LiPo range)
-        min_v = 6400  # 6.4V empty
-        max_v = 8400  # 8.4V full
-        percent = (voltage - min_v) / (max_v - min_v) * 100
-        return max(0, min(100, percent))
+    def get_battery_status(self) -> Optional[str]:
+        """
+        Battery level as 'ok', 'low' (recharge now) or 'critical' (power down).
+
+        Thresholds are 3.50 and 3.30 V per cell, leaving margin above the
+        3.00 V cell damage floor and the 9.0 V servo minimum.
+        """
+        state = self.get_battery_state()
+        return state.status if state else None
 
     def get_button(self) -> Optional[ButtonEvent]:
         """
@@ -147,14 +248,14 @@ class SensorReader:
         self._button_callback = callback
 
     def _poll_buttons(self):
-        """Background thread for button polling"""
+        """Background thread for button polling; no fault may kill it"""
         while self._running:
-            event = self.get_button()
-            if event and self._button_callback:
-                try:
+            try:
+                event = self.get_button()
+                if event and self._button_callback:
                     self._button_callback(event)
-                except Exception:
-                    pass
+            except Exception:
+                pass
             time.sleep(0.02)
 
     def get_gamepad(self) -> Optional[Tuple[List[float], List[int]]]:

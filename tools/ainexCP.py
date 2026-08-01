@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nicegui import ui, app, run
 from ainex_api import Robot
+from ainex_api.motion import MOTION_STOP_TIMEOUT_S
 
 # Global state
 robot: Robot = None
@@ -55,6 +56,8 @@ def graceful_shutdown():
 
     print("\n[Shutdown] Centering head...")
     try:
+        robot.motion.stop()   # play() refuses while a motion is in flight
+        robot.motion.wait(timeout=MOTION_STOP_TIMEOUT_S)
         robot.head.center(duration=1.0)
         time.sleep(1.0)
         print("[Shutdown] Standing...")

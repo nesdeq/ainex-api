@@ -8,20 +8,19 @@ Controls head pan/tilt servos with PID tracking support.
 import time
 from typing import Optional, Tuple
 from .board import Board
+from .servos import SERVO_CENTER, servo_limits
 
 
 # Head servo configuration
 HEAD_PAN_ID = 23
 HEAD_TILT_ID = 24
 
-# Servo limits (PWM values 0-1000)
-PAN_MIN = 125
-PAN_MAX = 875
-PAN_CENTER = 500
+# Travel limits come from servos.SERVO_LIMITS so both APIs enforce the same range.
+PAN_MIN, PAN_MAX = servo_limits(HEAD_PAN_ID)
+PAN_CENTER = SERVO_CENTER
 
-TILT_MIN = 315
-TILT_MAX = 625
-TILT_CENTER = 500
+TILT_MIN, TILT_MAX = servo_limits(HEAD_TILT_ID)
+TILT_CENTER = SERVO_CENTER
 
 # Default image dimensions (for tracking)
 DEFAULT_IMAGE_WIDTH = 640
@@ -39,12 +38,12 @@ class PIDController:
         self.windup_limit = windup_limit
         self._integral = 0.0
         self._prev_error = None
-        self._last_time = time.time()
+        self._last_time = time.monotonic()
 
     def update(self, error: float, dt: Optional[float] = None) -> float:
         """Compute PID output"""
         if dt is None:
-            now = time.time()
+            now = time.monotonic()
             dt = max(0.001, min(0.1, now - self._last_time))
             self._last_time = now
 
@@ -66,7 +65,7 @@ class PIDController:
         """Reset controller state"""
         self._integral = 0.0
         self._prev_error = None
-        self._last_time = time.time()
+        self._last_time = time.monotonic()
 
 
 class HeadController:
